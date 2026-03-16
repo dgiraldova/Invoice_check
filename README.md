@@ -1,6 +1,6 @@
-# Revisión de facturación de visitas
+# Software de gestión para Joint and Weldign
 
-App de escritorio (Electron + React + TypeScript) para revisar el estado de facturación de visitas desde Calendar, Gmail y carpeta local.
+App de escritorio (Electron + React + TypeScript) para manejo integraod de clientes, proyectos e inspectores, y hacer seguimiento a la facturación.
 
 ## Scripts
 
