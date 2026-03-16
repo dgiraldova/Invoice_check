@@ -1,4 +1,4 @@
-# Software de gestión para Joint and Weldign
+# Software de gestión para Joint and Welding
 
 App de escritorio (Electron + React + TypeScript) para manejo integraod de clientes, proyectos e inspectores, y hacer seguimiento a la facturación.
 
