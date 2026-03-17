@@ -27,6 +27,7 @@ const statusLabels: Record<WorkflowStatus, string> = {
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const nowISO = () => new Date().toISOString();
+const today = () => new Date().toISOString().slice(0, 10);
 const monthFromDate = (date: string) => date.slice(0, 7);
 
 const seedData = (): AppData => {
@@ -43,12 +44,13 @@ const seedData = (): AppData => {
     projectId: projectA.id,
     visitDate: "2026-03-14",
     inspector: "Carlos",
-    status: "pending_invoicing",
+    status: "invoiced",
     reportDoneAt: nowISO(),
     reviewedAt: nowISO(),
     reviewedBy: "Laura",
     reportSentAt: nowISO(),
-    adminNotifiedAt: nowISO()
+    adminNotifiedAt: nowISO(),
+    invoiceRecordId: "seed-invoice-1"
   };
 
   const visit2: Visit = {
@@ -80,7 +82,7 @@ const seedData = (): AppData => {
   };
 
   const invoice: InvoiceRecord = {
-    id: uid(),
+    id: "seed-invoice-1",
     invoiceNumber: "FAC-2026-001",
     dianCode: "DIAN-0001",
     invoiceDate: "2026-03-16",
@@ -88,9 +90,6 @@ const seedData = (): AppData => {
     companyId: companyA.id,
     visitIds: [visit1.id]
   };
-
-  visit1.status = "invoiced";
-  visit1.invoiceRecordId = invoice.id;
 
   return {
     companies: [companyA, companyB],
@@ -118,6 +117,48 @@ const nextStatus = (status: WorkflowStatus): WorkflowStatus | null => {
   return statuses[index + 1];
 };
 
+const getTransitionRequirement = (visit: Visit, next: WorkflowStatus, draft: TransitionDraft) => {
+  if (next === "report_done") {
+    if (!draft.reportDoneAt) return "Para marcar informe listo, registra la fecha/hora del informe.";
+  }
+  if (next === "report_reviewed") {
+    if (!visit.reportDoneAt && !draft.reportDoneAt) return "No puedes revisar un informe que no está marcado como listo.";
+    if (!draft.reviewedBy.trim()) return "Para marcar informe revisado, indica quién revisó.";
+    if (!draft.reviewedAt) return "Para marcar informe revisado, registra la fecha/hora de revisión.";
+  }
+  if (next === "report_sent") {
+    if (!visit.reviewedAt && !draft.reviewedAt) return "No puedes enviar un informe que no ha sido revisado.";
+    if (!draft.reportSentAt) return "Para marcar informe enviado, registra la fecha/hora de envío.";
+  }
+  if (next === "admin_notified") {
+    if (!visit.reportSentAt && !draft.reportSentAt) return "No puedes notificar admin antes de enviar el informe.";
+    if (!draft.adminNotifiedAt) return "Para notificar admin, registra la fecha/hora de notificación.";
+  }
+  if (next === "pending_invoicing") {
+    if (!visit.adminNotifiedAt && !draft.adminNotifiedAt) return "No puedes pasar a pending_invoicing sin haber notificado a admin.";
+  }
+  return null;
+};
+
+type TransitionDraft = {
+  reportDoneAt: string;
+  reviewedBy: string;
+  reviewedAt: string;
+  reportSentAt: string;
+  adminNotifiedAt: string;
+};
+
+const defaultDraft = (): TransitionDraft => ({
+  reportDoneAt: "",
+  reviewedBy: "",
+  reviewedAt: "",
+  reportSentAt: "",
+  adminNotifiedAt: ""
+});
+
+const toInputDateTime = (value?: string) => (value ? value.slice(0, 16) : "");
+const toStoredDateTime = (value: string) => (value ? new Date(value).toISOString() : "");
+
 const App: React.FC = () => {
   const [data, setData] = useState<AppData>(() => loadData());
   const [tab, setTab] = useState<"dashboard" | "master" | "visits" | "invoices">("dashboard");
@@ -129,15 +170,17 @@ const App: React.FC = () => {
   const [visitId, setVisitId] = useState("");
   const [visitCompanyId, setVisitCompanyId] = useState("");
   const [visitProjectId, setVisitProjectId] = useState("");
-  const [visitDate, setVisitDate] = useState(new Date().toISOString().slice(0, 10));
+  const [visitDate, setVisitDate] = useState(today());
   const [inspector, setInspector] = useState("");
   const [filter, setFilter] = useState<"all" | "pending" | "invoiced">("all");
   const [selectedCompanyId, setSelectedCompanyId] = useState("");
   const [selectedVisitIds, setSelectedVisitIds] = useState<string[]>([]);
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [dianCode, setDianCode] = useState("");
-  const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().slice(0, 10));
+  const [invoiceDate, setInvoiceDate] = useState(today());
   const [message, setMessage] = useState<string | null>(null);
+  const [activeVisitId, setActiveVisitId] = useState<string | null>(null);
+  const [transitionDraft, setTransitionDraft] = useState<TransitionDraft>(defaultDraft());
 
   const persist = (next: AppData) => {
     setData(next);
@@ -146,6 +189,7 @@ const App: React.FC = () => {
 
   const companyMap = useMemo(() => Object.fromEntries(data.companies.map((c) => [c.id, c])), [data.companies]);
   const projectMap = useMemo(() => Object.fromEntries(data.projects.map((p) => [p.id, p])), [data.projects]);
+  const activeVisit = data.visits.find((visit) => visit.id === activeVisitId) ?? null;
 
   const filteredVisits = useMemo(() => {
     return data.visits.filter((visit) => {
@@ -200,18 +244,39 @@ const App: React.FC = () => {
     setMessage("Visita creada.");
   };
 
-  const advanceVisit = (visit: Visit) => {
-    const next = nextStatus(visit.status);
-    if (!next) return;
-    const updated: Visit = { ...visit, status: next };
-    if (next === "report_done") updated.reportDoneAt = nowISO();
-    if (next === "report_reviewed") {
-      updated.reviewedAt = nowISO();
-      updated.reviewedBy = updated.reviewedBy ?? "Supervisor";
-    }
-    if (next === "report_sent") updated.reportSentAt = nowISO();
-    if (next === "admin_notified") updated.adminNotifiedAt = nowISO();
-    persist({ ...data, visits: data.visits.map((v) => (v.id === visit.id ? updated : v)) });
+  const selectVisit = (visit: Visit) => {
+    setActiveVisitId(visit.id);
+    setTransitionDraft({
+      reportDoneAt: toInputDateTime(visit.reportDoneAt),
+      reviewedBy: visit.reviewedBy ?? "",
+      reviewedAt: toInputDateTime(visit.reviewedAt),
+      reportSentAt: toInputDateTime(visit.reportSentAt),
+      adminNotifiedAt: toInputDateTime(visit.adminNotifiedAt)
+    });
+  };
+
+  const advanceVisit = () => {
+    if (!activeVisit) return;
+    const next = nextStatus(activeVisit.status);
+    if (!next) return setMessage("Esta visita ya está en el estado final.");
+
+    const requirement = getTransitionRequirement(activeVisit, next, transitionDraft);
+    if (requirement) return setMessage(requirement);
+
+    const updated: Visit = {
+      ...activeVisit,
+      status: next,
+      reportDoneAt: transitionDraft.reportDoneAt ? toStoredDateTime(transitionDraft.reportDoneAt) : activeVisit.reportDoneAt,
+      reviewedBy: transitionDraft.reviewedBy.trim() || activeVisit.reviewedBy,
+      reviewedAt: transitionDraft.reviewedAt ? toStoredDateTime(transitionDraft.reviewedAt) : activeVisit.reviewedAt,
+      reportSentAt: transitionDraft.reportSentAt ? toStoredDateTime(transitionDraft.reportSentAt) : activeVisit.reportSentAt,
+      adminNotifiedAt: transitionDraft.adminNotifiedAt ? toStoredDateTime(transitionDraft.adminNotifiedAt) : activeVisit.adminNotifiedAt
+    };
+
+    const nextData = { ...data, visits: data.visits.map((visit) => (visit.id === activeVisit.id ? updated : visit)) };
+    persist(nextData);
+    setActiveVisitId(updated.id);
+    setMessage(`Visita ${updated.visitId} movida a ${statusLabels[next]}.`);
   };
 
   const toggleSelectedVisit = (id: string) => {
@@ -220,6 +285,7 @@ const App: React.FC = () => {
 
   const createInvoiceRecord = () => {
     if (!invoiceNumber.trim() || !dianCode.trim() || !invoiceDate) return setMessage("Factura, DIAN y fecha son obligatorios.");
+    if (data.invoiceRecords.some((invoice) => invoice.invoiceNumber === invoiceNumber.trim())) return setMessage("Ese número de factura ya está registrado.");
     if (selectedVisitIds.length === 0) return setMessage("Selecciona al menos una visita pendiente.");
     const visits = data.visits.filter((v) => selectedVisitIds.includes(v.id));
     if (visits.some((v) => v.status !== "pending_invoicing")) return setMessage("Solo puedes facturar visitas en pending_invoicing.");
@@ -282,7 +348,7 @@ const App: React.FC = () => {
             <div className="panel__header panel__header--stack">
               <div>
                 <h2>Resumen operativo</h2>
-                <p>Esto reemplaza el prototipo de revisión por un flujo real de operaciones.</p>
+                <p>Ahora el workflow exige metadatos reales antes de avanzar.</p>
               </div>
             </div>
             <div className="cards">
@@ -325,36 +391,80 @@ const App: React.FC = () => {
               </div>
               <button className="btn btn--primary" onClick={createVisit}>Crear visita</button>
             </section>
-            <section className="panel">
-              <div className="panel__header">
-                <div>
-                  <h2>Cola de visitas</h2>
-                  <p>Prioridad PM: llevar visitas hasta pending_invoicing.</p>
+
+            <div className="grid grid--two">
+              <section className="panel">
+                <div className="panel__header">
+                  <div>
+                    <h2>Cola de visitas</h2>
+                    <p>Selecciona una visita para avanzar con validaciones reales.</p>
+                  </div>
+                  <div className="status-bar">
+                    <select value={filter} onChange={(e) => setFilter(e.target.value as any)}><option value="all">Todas</option><option value="pending">Pendientes de facturar</option><option value="invoiced">Facturadas</option></select>
+                    <select value={selectedCompanyId} onChange={(e) => setSelectedCompanyId(e.target.value)}><option value="">Todas las empresas</option>{data.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+                  </div>
                 </div>
-                <div className="status-bar">
-                  <select value={filter} onChange={(e) => setFilter(e.target.value as any)}><option value="all">Todas</option><option value="pending">Pendientes de facturar</option><option value="invoiced">Facturadas</option></select>
-                  <select value={selectedCompanyId} onChange={(e) => setSelectedCompanyId(e.target.value)}><option value="">Todas las empresas</option>{data.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+                <div className="table-wrap">
+                  <table className="table">
+                    <thead><tr><th>visit_id</th><th>Empresa</th><th>Proyecto</th><th>Fecha</th><th>Inspector</th><th>Estado</th><th></th></tr></thead>
+                    <tbody>
+                      {filteredVisits.map((visit) => (
+                        <tr key={visit.id} className={activeVisitId === visit.id ? "row--active" : ""}>
+                          <td>{visit.visitId}</td>
+                          <td>{companyMap[visit.companyId]?.name}</td>
+                          <td>{projectMap[visit.projectId]?.code}</td>
+                          <td>{visit.visitDate}</td>
+                          <td>{visit.inspector}</td>
+                          <td>{statusLabels[visit.status]}</td>
+                          <td><button className="btn btn--ghost" onClick={() => selectVisit(visit)}>Gestionar</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              </div>
-              <div className="table-wrap">
-                <table className="table">
-                  <thead><tr><th>visit_id</th><th>Empresa</th><th>Proyecto</th><th>Fecha</th><th>Inspector</th><th>Estado</th><th>Acción</th></tr></thead>
-                  <tbody>
-                    {filteredVisits.map((visit) => (
-                      <tr key={visit.id}>
-                        <td>{visit.visitId}</td>
-                        <td>{companyMap[visit.companyId]?.name}</td>
-                        <td>{projectMap[visit.projectId]?.code}</td>
-                        <td>{visit.visitDate}</td>
-                        <td>{visit.inspector}</td>
-                        <td>{statusLabels[visit.status]}</td>
-                        <td>{visit.status !== "invoiced" ? <button className="btn btn--ghost" onClick={() => advanceVisit(visit)}>Avanzar</button> : "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
+              </section>
+
+              <section className="panel">
+                <h2>Detalle y transición</h2>
+                {!activeVisit && <p>Selecciona una visita para gestionar sus transiciones.</p>}
+                {activeVisit && (
+                  <>
+                    <div className="detail-list">
+                      <div><strong>visit_id:</strong> {activeVisit.visitId}</div>
+                      <div><strong>Empresa:</strong> {companyMap[activeVisit.companyId]?.name}</div>
+                      <div><strong>Proyecto:</strong> {projectMap[activeVisit.projectId]?.code}</div>
+                      <div><strong>Estado actual:</strong> {statusLabels[activeVisit.status]}</div>
+                      <div><strong>Siguiente estado:</strong> {nextStatus(activeVisit.status) ? statusLabels[nextStatus(activeVisit.status)!] : "Final"}</div>
+                    </div>
+
+                    <div className="grid">
+                      <div className="field">
+                        <label>Fecha/hora informe listo</label>
+                        <input type="datetime-local" value={transitionDraft.reportDoneAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reportDoneAt: e.target.value }))} />
+                      </div>
+                      <div className="field">
+                        <label>Revisado por</label>
+                        <input value={transitionDraft.reviewedBy} onChange={(e) => setTransitionDraft((d) => ({ ...d, reviewedBy: e.target.value }))} />
+                      </div>
+                      <div className="field">
+                        <label>Fecha/hora revisión</label>
+                        <input type="datetime-local" value={transitionDraft.reviewedAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reviewedAt: e.target.value }))} />
+                      </div>
+                      <div className="field">
+                        <label>Fecha/hora envío</label>
+                        <input type="datetime-local" value={transitionDraft.reportSentAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reportSentAt: e.target.value }))} />
+                      </div>
+                      <div className="field">
+                        <label>Fecha/hora notificación admin</label>
+                        <input type="datetime-local" value={transitionDraft.adminNotifiedAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, adminNotifiedAt: e.target.value }))} />
+                      </div>
+                    </div>
+
+                    <button className="btn btn--primary" onClick={advanceVisit} disabled={activeVisit.status === "invoiced"}>Avanzar estado</button>
+                  </>
+                )}
+              </section>
+            </div>
           </>
         )}
 

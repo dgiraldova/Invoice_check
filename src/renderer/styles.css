@@ -201,6 +201,10 @@ body {
   gap: 16px;
 }
 
+.grid--two {
+  grid-template-columns: 1.2fr 1fr;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -257,6 +261,17 @@ body {
 
 .chip strong {
   color: var(--text);
+}
+
+.detail-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+  color: var(--muted);
+}
+
+.row--active {
+  outline: 2px solid #99f6e4;
 }
 
 .chip--ok {
