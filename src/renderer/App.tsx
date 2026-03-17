@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import type { AppData, Company, InvoiceRecord, Project, Visit, WorkflowStatus } from "./services/types";
 
 const STORAGE_KEY = "invoice-check-v1-data";
+const BACKUP_FILE = "invoice-check-backup.json";
 
 const statuses: WorkflowStatus[] = [
   "created",
@@ -99,7 +100,7 @@ const seedData = (): AppData => {
   };
 };
 
-const loadData = (): AppData => {
+const loadLocalData = (): AppData => {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return seedData();
   try {
@@ -109,7 +110,7 @@ const loadData = (): AppData => {
   }
 };
 
-const saveData = (data: AppData) => localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+const saveLocalData = (data: AppData) => localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 
 const nextStatus = (status: WorkflowStatus): WorkflowStatus | null => {
   const index = statuses.indexOf(status);
@@ -160,7 +161,7 @@ const toInputDateTime = (value?: string) => (value ? value.slice(0, 16) : "");
 const toStoredDateTime = (value: string) => (value ? new Date(value).toISOString() : "");
 
 const App: React.FC = () => {
-  const [data, setData] = useState<AppData>(() => loadData());
+  const [data, setData] = useState<AppData>(() => loadLocalData());
   const [tab, setTab] = useState<"dashboard" | "master" | "visits" | "invoices">("dashboard");
   const [companyName, setCompanyName] = useState("");
   const [companyNit, setCompanyNit] = useState("");
@@ -185,10 +186,63 @@ const App: React.FC = () => {
   const [billingMonthFilter, setBillingMonthFilter] = useState("all");
   const [invoiceView, setInvoiceView] = useState<"pending" | "registered">("pending");
   const [activeInvoiceId, setActiveInvoiceId] = useState<string | null>(null);
+  const [backupPath, setBackupPath] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
 
-  const persist = (next: AppData) => {
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrate = async () => {
+      try {
+        const userDataPath = await window.electronAPI.getUserDataPath();
+        const filePath = `${userDataPath}/${BACKUP_FILE}`;
+        setBackupPath(filePath);
+        try {
+          const raw = await window.electronAPI.readFile(filePath);
+          const parsed = JSON.parse(raw) as AppData;
+          if (!cancelled) {
+            setData(parsed);
+            saveLocalData(parsed);
+          }
+        } catch {
+          // no backup yet; localStorage/seed stays in place
+        }
+      } finally {
+        if (!cancelled) setHydrated(true);
+      }
+    };
+
+    hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const persist = async (next: AppData) => {
     setData(next);
-    saveData(next);
+    saveLocalData(next);
+    if (backupPath) {
+      await window.electronAPI.writeFile(backupPath, JSON.stringify(next, null, 2));
+    }
+  };
+
+  const exportBackup = async () => {
+    const filePath = await window.electronAPI.saveFileDialog(`invoice-check-backup-${today()}.json`);
+    if (!filePath) return;
+    await window.electronAPI.writeFile(filePath, JSON.stringify(data, null, 2));
+    setMessage(`Backup exportado en ${filePath}.`);
+  };
+
+  const importBackup = async () => {
+    const filePath = await window.electronAPI.openFileDialog([{ name: "JSON", extensions: ["json"] }]);
+    if (!filePath) return;
+    const raw = await window.electronAPI.readFile(filePath);
+    const parsed = JSON.parse(raw) as AppData;
+    await persist(parsed);
+    setActiveVisitId(null);
+    setActiveInvoiceId(null);
+    setSelectedVisitIds([]);
+    setMessage(`Backup importado desde ${filePath}.`);
   };
 
   const companyMap = useMemo(() => Object.fromEntries(data.companies.map((c) => [c.id, c])), [data.companies]);
@@ -224,28 +278,28 @@ const App: React.FC = () => {
     });
   }, [data.invoiceRecords, invoiceCompanyFilter, billingMonthFilter]);
 
-  const createCompany = () => {
+  const createCompany = async () => {
     if (!companyName.trim() || !companyNit.trim()) return setMessage("Empresa y NIT son obligatorios.");
     if (data.companies.some((c) => c.nit === companyNit.trim())) return setMessage("Ese NIT ya existe.");
     const company: Company = { id: uid(), name: companyName.trim(), nit: companyNit.trim() };
-    persist({ ...data, companies: [...data.companies, company] });
+    await persist({ ...data, companies: [...data.companies, company] });
     setCompanyName("");
     setCompanyNit("");
     setMessage("Empresa creada.");
   };
 
-  const createProject = () => {
+  const createProject = async () => {
     if (!projectCompanyId || !projectName.trim() || !projectCode.trim()) return setMessage("Proyecto, código y empresa son obligatorios.");
     if (data.projects.some((p) => p.code === projectCode.trim())) return setMessage("Ese project_code ya existe.");
     const project: Project = { id: uid(), companyId: projectCompanyId, code: projectCode.trim(), name: projectName.trim() };
-    persist({ ...data, projects: [...data.projects, project] });
+    await persist({ ...data, projects: [...data.projects, project] });
     setProjectName("");
     setProjectCode("");
     setProjectCompanyId("");
     setMessage("Proyecto creado.");
   };
 
-  const createVisit = () => {
+  const createVisit = async () => {
     if (!visitId.trim() || !visitCompanyId || !visitProjectId || !visitDate || !inspector.trim()) return setMessage("Completa todos los campos de visita.");
     if (data.visits.some((v) => v.visitId === visitId.trim())) return setMessage("Ese visit_id ya existe.");
     const visit: Visit = {
@@ -257,7 +311,7 @@ const App: React.FC = () => {
       inspector: inspector.trim(),
       status: "created"
     };
-    persist({ ...data, visits: [...data.visits, visit] });
+    await persist({ ...data, visits: [...data.visits, visit] });
     setVisitId("");
     setVisitCompanyId("");
     setVisitProjectId("");
@@ -276,7 +330,7 @@ const App: React.FC = () => {
     });
   };
 
-  const advanceVisit = () => {
+  const advanceVisit = async () => {
     if (!activeVisit) return;
     const next = nextStatus(activeVisit.status);
     if (!next) return setMessage("Esta visita ya está en el estado final.");
@@ -295,7 +349,7 @@ const App: React.FC = () => {
     };
 
     const nextData = { ...data, visits: data.visits.map((visit) => (visit.id === activeVisit.id ? updated : visit)) };
-    persist(nextData);
+    await persist(nextData);
     setActiveVisitId(updated.id);
     setMessage(`Visita ${updated.visitId} movida a ${statusLabels[next]}.`);
   };
@@ -329,7 +383,7 @@ const App: React.FC = () => {
     setInvoiceCompanyFilter("");
   };
 
-  const createInvoiceRecord = () => {
+  const createInvoiceRecord = async () => {
     if (!invoiceNumber.trim() || !dianCode.trim() || !invoiceDate) return setMessage("Factura, DIAN y fecha son obligatorios.");
     if (data.invoiceRecords.some((invoice) => invoice.invoiceNumber === invoiceNumber.trim())) return setMessage("Ese número de factura ya está registrado.");
     if (selectedVisitIds.length === 0) return setMessage("Selecciona al menos una visita pendiente.");
@@ -351,7 +405,7 @@ const App: React.FC = () => {
         ? { ...visit, status: "invoiced" as WorkflowStatus, invoiceRecordId: invoice.id }
         : visit
     );
-    persist({ ...data, invoiceRecords: [...data.invoiceRecords, invoice], visits: nextVisits });
+    await persist({ ...data, invoiceRecords: [...data.invoiceRecords, invoice], visits: nextVisits });
     setSelectedVisitIds([]);
     setInvoiceNumber("");
     setDianCode("");
@@ -388,6 +442,11 @@ const App: React.FC = () => {
               <button className="btn btn--ghost" onClick={() => setTab("invoices")}>Facturas</button>
             </div>
           </div>
+          <div className="status-bar">
+            <button className="btn btn--ghost" onClick={exportBackup}>Exportar backup</button>
+            <button className="btn btn--ghost" onClick={importBackup}>Importar backup</button>
+            <span className="status status--idle">{hydrated ? `Backup local: ${backupPath ?? "pendiente"}` : "Cargando backup local..."}</span>
+          </div>
           {message && <p className="status-message">{message}</p>}
         </section>
 
@@ -396,7 +455,7 @@ const App: React.FC = () => {
             <div className="panel__header panel__header--stack">
               <div>
                 <h2>Resumen operativo</h2>
-                <p>Ahora el workflow exige metadatos reales antes de avanzar.</p>
+                <p>Ahora el workflow exige metadatos reales y guarda respaldo local en disco.</p>
               </div>
             </div>
             <div className="cards">
@@ -486,26 +545,11 @@ const App: React.FC = () => {
                     </div>
 
                     <div className="grid">
-                      <div className="field">
-                        <label>Fecha/hora informe listo</label>
-                        <input type="datetime-local" value={transitionDraft.reportDoneAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reportDoneAt: e.target.value }))} />
-                      </div>
-                      <div className="field">
-                        <label>Revisado por</label>
-                        <input value={transitionDraft.reviewedBy} onChange={(e) => setTransitionDraft((d) => ({ ...d, reviewedBy: e.target.value }))} />
-                      </div>
-                      <div className="field">
-                        <label>Fecha/hora revisión</label>
-                        <input type="datetime-local" value={transitionDraft.reviewedAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reviewedAt: e.target.value }))} />
-                      </div>
-                      <div className="field">
-                        <label>Fecha/hora envío</label>
-                        <input type="datetime-local" value={transitionDraft.reportSentAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reportSentAt: e.target.value }))} />
-                      </div>
-                      <div className="field">
-                        <label>Fecha/hora notificación admin</label>
-                        <input type="datetime-local" value={transitionDraft.adminNotifiedAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, adminNotifiedAt: e.target.value }))} />
-                      </div>
+                      <div className="field"><label>Fecha/hora informe listo</label><input type="datetime-local" value={transitionDraft.reportDoneAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reportDoneAt: e.target.value }))} /></div>
+                      <div className="field"><label>Revisado por</label><input value={transitionDraft.reviewedBy} onChange={(e) => setTransitionDraft((d) => ({ ...d, reviewedBy: e.target.value }))} /></div>
+                      <div className="field"><label>Fecha/hora revisión</label><input type="datetime-local" value={transitionDraft.reviewedAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reviewedAt: e.target.value }))} /></div>
+                      <div className="field"><label>Fecha/hora envío</label><input type="datetime-local" value={transitionDraft.reportSentAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reportSentAt: e.target.value }))} /></div>
+                      <div className="field"><label>Fecha/hora notificación admin</label><input type="datetime-local" value={transitionDraft.adminNotifiedAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, adminNotifiedAt: e.target.value }))} /></div>
                     </div>
 
                     <button className="btn btn--primary" onClick={advanceVisit} disabled={activeVisit.status === "invoiced"}>Avanzar estado</button>
@@ -531,20 +575,8 @@ const App: React.FC = () => {
               </div>
 
               <div className="filters filters--tight">
-                <label className="field">
-                  <span>Empresa</span>
-                  <select value={invoiceCompanyFilter} onChange={(e) => setInvoiceCompanyFilter(e.target.value)}>
-                    <option value="">Todas las empresas</option>
-                    {data.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </select>
-                </label>
-                <label className="field">
-                  <span>Mes facturación</span>
-                  <select value={billingMonthFilter} onChange={(e) => setBillingMonthFilter(e.target.value)}>
-                    <option value="all">Todos</option>
-                    {monthOptions.map((month) => <option key={month} value={month}>{month}</option>)}
-                  </select>
-                </label>
+                <label className="field"><span>Empresa</span><select value={invoiceCompanyFilter} onChange={(e) => setInvoiceCompanyFilter(e.target.value)}><option value="">Todas las empresas</option>{data.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+                <label className="field"><span>Mes facturación</span><select value={billingMonthFilter} onChange={(e) => setBillingMonthFilter(e.target.value)}><option value="all">Todos</option>{monthOptions.map((month) => <option key={month} value={month}>{month}</option>)}</select></label>
               </div>
             </section>
 
@@ -598,12 +630,7 @@ const App: React.FC = () => {
                           <thead><tr><th>visit_id</th><th>Proyecto</th><th>Inspector</th><th>Fecha</th></tr></thead>
                           <tbody>
                             {selectedVisits.map((visit) => (
-                              <tr key={visit.id}>
-                                <td>{visit.visitId}</td>
-                                <td>{projectMap[visit.projectId]?.code}</td>
-                                <td>{visit.inspector}</td>
-                                <td>{visit.visitDate}</td>
-                              </tr>
+                              <tr key={visit.id}><td>{visit.visitId}</td><td>{projectMap[visit.projectId]?.code}</td><td>{visit.inspector}</td><td>{visit.visitDate}</td></tr>
                             ))}
                           </tbody>
                         </table>
@@ -624,12 +651,7 @@ const App: React.FC = () => {
                       <tbody>
                         {filteredInvoices.map((invoice) => (
                           <tr key={invoice.id} className={activeInvoiceId === invoice.id ? "row--active" : ""}>
-                            <td>{invoice.invoiceNumber}</td>
-                            <td>{invoice.dianCode}</td>
-                            <td>{invoice.billingMonth}</td>
-                            <td>{companyMap[invoice.companyId]?.name}</td>
-                            <td>{invoice.visitIds.length}</td>
-                            <td><button className="btn btn--ghost" onClick={() => setActiveInvoiceId(invoice.id)}>Ver detalle</button></td>
+                            <td>{invoice.invoiceNumber}</td><td>{invoice.dianCode}</td><td>{invoice.billingMonth}</td><td>{companyMap[invoice.companyId]?.name}</td><td>{invoice.visitIds.length}</td><td><button className="btn btn--ghost" onClick={() => setActiveInvoiceId(invoice.id)}>Ver detalle</button></td>
                           </tr>
                         ))}
                       </tbody>
@@ -654,12 +676,7 @@ const App: React.FC = () => {
                           <thead><tr><th>visit_id</th><th>Proyecto</th><th>Inspector</th><th>Estado</th></tr></thead>
                           <tbody>
                             {activeInvoice.visitIds.map((visitId) => data.visits.find((visit) => visit.id === visitId)).filter(Boolean).map((visit) => (
-                              <tr key={visit!.id}>
-                                <td>{visit!.visitId}</td>
-                                <td>{projectMap[visit!.projectId]?.code}</td>
-                                <td>{visit!.inspector}</td>
-                                <td>{statusLabels[visit!.status]}</td>
-                              </tr>
+                              <tr key={visit!.id}><td>{visit!.visitId}</td><td>{projectMap[visit!.projectId]?.code}</td><td>{visit!.inspector}</td><td>{statusLabels[visit!.status]}</td></tr>
                             ))}
                           </tbody>
                         </table>

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import path from "node:path";
 import fs from "node:fs/promises";
 
@@ -61,11 +61,31 @@ ipcMain.handle("save-file-dialog", async (_event, defaultName: string) => {
   return result.filePath;
 });
 
+ipcMain.handle("open-file-dialog", async (_event, filters?: { name: string; extensions: string[] }[]) => {
+  const result = await dialog.showOpenDialog({
+    properties: ["openFile"],
+    filters
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+  return result.filePaths[0];
+});
+
 ipcMain.handle("write-file", async (_event, filePath: string, data: Uint8Array | string) => {
   await fs.writeFile(filePath, data);
   return true;
 });
 
+ipcMain.handle("read-file", async (_event, filePath: string) => {
+  return fs.readFile(filePath, "utf8");
+});
+
+ipcMain.handle("get-user-data-path", async () => {
+  return app.getPath("userData");
+});
+
 ipcMain.handle("open-file", async (_event, filePath: string) => {
+  await shell.openPath(filePath);
   return { ok: true, path: filePath };
 });
