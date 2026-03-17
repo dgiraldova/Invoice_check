@@ -272,6 +272,7 @@ body {
 
 .row--active {
   outline: 2px solid #99f6e4;
+  background: #f0fdfa;
 }
 
 .chip--ok {
@@ -309,6 +310,10 @@ body {
   gap: 16px;
   flex-wrap: wrap;
   margin-bottom: 16px;
+}
+
+.filters--tight {
+  margin-bottom: 0;
 }
 
 .actions {

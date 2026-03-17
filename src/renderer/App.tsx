@@ -117,6 +117,14 @@ const nextStatus = (status: WorkflowStatus): WorkflowStatus | null => {
   return statuses[index + 1];
 };
 
+type TransitionDraft = {
+  reportDoneAt: string;
+  reviewedBy: string;
+  reviewedAt: string;
+  reportSentAt: string;
+  adminNotifiedAt: string;
+};
+
 const getTransitionRequirement = (visit: Visit, next: WorkflowStatus, draft: TransitionDraft) => {
   if (next === "report_done") {
     if (!draft.reportDoneAt) return "Para marcar informe listo, registra la fecha/hora del informe.";
@@ -138,14 +146,6 @@ const getTransitionRequirement = (visit: Visit, next: WorkflowStatus, draft: Tra
     if (!visit.adminNotifiedAt && !draft.adminNotifiedAt) return "No puedes pasar a pending_invoicing sin haber notificado a admin.";
   }
   return null;
-};
-
-type TransitionDraft = {
-  reportDoneAt: string;
-  reviewedBy: string;
-  reviewedAt: string;
-  reportSentAt: string;
-  adminNotifiedAt: string;
 };
 
 const defaultDraft = (): TransitionDraft => ({
@@ -181,6 +181,10 @@ const App: React.FC = () => {
   const [message, setMessage] = useState<string | null>(null);
   const [activeVisitId, setActiveVisitId] = useState<string | null>(null);
   const [transitionDraft, setTransitionDraft] = useState<TransitionDraft>(defaultDraft());
+  const [invoiceCompanyFilter, setInvoiceCompanyFilter] = useState("");
+  const [billingMonthFilter, setBillingMonthFilter] = useState("all");
+  const [invoiceView, setInvoiceView] = useState<"pending" | "registered">("pending");
+  const [activeInvoiceId, setActiveInvoiceId] = useState<string | null>(null);
 
   const persist = (next: AppData) => {
     setData(next);
@@ -190,6 +194,7 @@ const App: React.FC = () => {
   const companyMap = useMemo(() => Object.fromEntries(data.companies.map((c) => [c.id, c])), [data.companies]);
   const projectMap = useMemo(() => Object.fromEntries(data.projects.map((p) => [p.id, p])), [data.projects]);
   const activeVisit = data.visits.find((visit) => visit.id === activeVisitId) ?? null;
+  const activeInvoice = data.invoiceRecords.find((invoice) => invoice.id === activeInvoiceId) ?? null;
 
   const filteredVisits = useMemo(() => {
     return data.visits.filter((visit) => {
@@ -202,6 +207,22 @@ const App: React.FC = () => {
 
   const pendingVisits = data.visits.filter((v) => v.status === "pending_invoicing");
   const invoicedVisits = data.visits.filter((v) => v.status === "invoiced");
+
+  const selectablePendingVisits = useMemo(() => {
+    return pendingVisits.filter((visit) => !invoiceCompanyFilter || visit.companyId === invoiceCompanyFilter);
+  }, [pendingVisits, invoiceCompanyFilter]);
+
+  const selectedVisits = data.visits.filter((visit) => selectedVisitIds.includes(visit.id));
+  const selectedInvoiceCompanyId = selectedVisits[0]?.companyId ?? "";
+  const monthOptions = Array.from(new Set(data.invoiceRecords.map((invoice) => invoice.billingMonth))).sort();
+
+  const filteredInvoices = useMemo(() => {
+    return data.invoiceRecords.filter((invoice) => {
+      if (invoiceCompanyFilter && invoice.companyId !== invoiceCompanyFilter) return false;
+      if (billingMonthFilter !== "all" && invoice.billingMonth !== billingMonthFilter) return false;
+      return true;
+    });
+  }, [data.invoiceRecords, invoiceCompanyFilter, billingMonthFilter]);
 
   const createCompany = () => {
     if (!companyName.trim() || !companyNit.trim()) return setMessage("Empresa y NIT son obligatorios.");
@@ -280,7 +301,32 @@ const App: React.FC = () => {
   };
 
   const toggleSelectedVisit = (id: string) => {
-    setSelectedVisitIds((current) => (current.includes(id) ? current.filter((v) => v !== id) : [...current, id]));
+    const targetVisit = data.visits.find((visit) => visit.id === id);
+    if (!targetVisit) return;
+
+    setSelectedVisitIds((current) => {
+      const exists = current.includes(id);
+      if (exists) return current.filter((visitId) => visitId !== id);
+
+      if (current.length === 0) {
+        setInvoiceCompanyFilter(targetVisit.companyId);
+        return [id];
+      }
+
+      const currentVisits = data.visits.filter((visit) => current.includes(visit.id));
+      const currentCompanyId = currentVisits[0]?.companyId;
+      if (currentCompanyId && currentCompanyId !== targetVisit.companyId) {
+        setMessage("No puedes mezclar visitas de empresas distintas en la misma factura.");
+        return current;
+      }
+
+      return [...current, id];
+    });
+  };
+
+  const clearInvoiceSelection = () => {
+    setSelectedVisitIds([]);
+    setInvoiceCompanyFilter("");
   };
 
   const createInvoiceRecord = () => {
@@ -309,6 +355,8 @@ const App: React.FC = () => {
     setSelectedVisitIds([]);
     setInvoiceNumber("");
     setDianCode("");
+    setActiveInvoiceId(invoice.id);
+    setInvoiceView("registered");
     setMessage("Factura externa registrada y visitas marcadas como facturadas.");
   };
 
@@ -471,51 +519,156 @@ const App: React.FC = () => {
         {tab === "invoices" && (
           <>
             <section className="panel">
-              <h2>Registrar factura externa</h2>
-              <p>Solo permite seleccionar visitas ya listas para facturar.</p>
-              <div className="grid">
-                <div className="field"><label>Número de factura</label><input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} /></div>
-                <div className="field"><label>Código DIAN</label><input value={dianCode} onChange={(e) => setDianCode(e.target.value)} /></div>
-                <div className="field"><label>Fecha factura</label><input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} /></div>
+              <div className="panel__header">
+                <div>
+                  <h2>Facturación</h2>
+                  <p>Separa claramente pendientes por facturar vs facturas ya registradas.</p>
+                </div>
+                <div className="status-bar">
+                  <button className="btn btn--ghost" onClick={() => setInvoiceView("pending")}>Pendientes</button>
+                  <button className="btn btn--ghost" onClick={() => setInvoiceView("registered")}>Registradas</button>
+                </div>
               </div>
-              <div className="table-wrap">
-                <table className="table">
-                  <thead><tr><th></th><th>visit_id</th><th>Empresa</th><th>Proyecto</th><th>Fecha</th><th>Estado</th></tr></thead>
-                  <tbody>
-                    {pendingVisits.map((visit) => (
-                      <tr key={visit.id}>
-                        <td><input type="checkbox" checked={selectedVisitIds.includes(visit.id)} onChange={() => toggleSelectedVisit(visit.id)} /></td>
-                        <td>{visit.visitId}</td>
-                        <td>{companyMap[visit.companyId]?.name}</td>
-                        <td>{projectMap[visit.projectId]?.code}</td>
-                        <td>{visit.visitDate}</td>
-                        <td>{statusLabels[visit.status]}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <button className="btn btn--primary" onClick={createInvoiceRecord}>Registrar y vincular visitas</button>
-            </section>
-            <section className="panel">
-              <h2>Facturas registradas</h2>
-              <div className="table-wrap">
-                <table className="table">
-                  <thead><tr><th>Factura</th><th>DIAN</th><th>Mes</th><th>Empresa</th><th>Visitas vinculadas</th></tr></thead>
-                  <tbody>
-                    {data.invoiceRecords.map((invoice) => (
-                      <tr key={invoice.id}>
-                        <td>{invoice.invoiceNumber}</td>
-                        <td>{invoice.dianCode}</td>
-                        <td>{invoice.billingMonth}</td>
-                        <td>{companyMap[invoice.companyId]?.name}</td>
-                        <td>{invoice.visitIds.map((visitId) => data.visits.find((v) => v.id === visitId)?.visitId).filter(Boolean).join(", ")}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+
+              <div className="filters filters--tight">
+                <label className="field">
+                  <span>Empresa</span>
+                  <select value={invoiceCompanyFilter} onChange={(e) => setInvoiceCompanyFilter(e.target.value)}>
+                    <option value="">Todas las empresas</option>
+                    {data.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Mes facturación</span>
+                  <select value={billingMonthFilter} onChange={(e) => setBillingMonthFilter(e.target.value)}>
+                    <option value="all">Todos</option>
+                    {monthOptions.map((month) => <option key={month} value={month}>{month}</option>)}
+                  </select>
+                </label>
               </div>
             </section>
+
+            {invoiceView === "pending" && (
+              <div className="grid grid--two">
+                <section className="panel">
+                  <div className="panel__header">
+                    <div>
+                      <h2>Registrar factura externa</h2>
+                      <p>Si eliges una visita, la selección queda bloqueada a esa empresa.</p>
+                    </div>
+                    <button className="btn btn--ghost" onClick={clearInvoiceSelection}>Limpiar selección</button>
+                  </div>
+                  <div className="grid">
+                    <div className="field"><label>Número de factura</label><input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} /></div>
+                    <div className="field"><label>Código DIAN</label><input value={dianCode} onChange={(e) => setDianCode(e.target.value)} /></div>
+                    <div className="field"><label>Fecha factura</label><input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} /></div>
+                  </div>
+                  <div className="table-wrap">
+                    <table className="table">
+                      <thead><tr><th></th><th>visit_id</th><th>Empresa</th><th>Proyecto</th><th>Fecha</th><th>Estado</th></tr></thead>
+                      <tbody>
+                        {selectablePendingVisits.map((visit) => (
+                          <tr key={visit.id} className={selectedVisitIds.includes(visit.id) ? "row--active" : ""}>
+                            <td><input type="checkbox" checked={selectedVisitIds.includes(visit.id)} onChange={() => toggleSelectedVisit(visit.id)} /></td>
+                            <td>{visit.visitId}</td>
+                            <td>{companyMap[visit.companyId]?.name}</td>
+                            <td>{projectMap[visit.projectId]?.code}</td>
+                            <td>{visit.visitDate}</td>
+                            <td>{statusLabels[visit.status]}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <button className="btn btn--primary" onClick={createInvoiceRecord}>Registrar y vincular visitas</button>
+                </section>
+
+                <section className="panel">
+                  <h2>Resumen de selección</h2>
+                  {selectedVisitIds.length === 0 && <p>No hay visitas seleccionadas todavía.</p>}
+                  {selectedVisitIds.length > 0 && (
+                    <>
+                      <div className="detail-list">
+                        <div><strong>Empresa bloqueada:</strong> {companyMap[selectedInvoiceCompanyId]?.name}</div>
+                        <div><strong>Visitas seleccionadas:</strong> {selectedVisitIds.length}</div>
+                        <div><strong>Rango fechas:</strong> {selectedVisits.map((v) => v.visitDate).sort().join(" → ")}</div>
+                      </div>
+                      <div className="table-wrap">
+                        <table className="table">
+                          <thead><tr><th>visit_id</th><th>Proyecto</th><th>Inspector</th><th>Fecha</th></tr></thead>
+                          <tbody>
+                            {selectedVisits.map((visit) => (
+                              <tr key={visit.id}>
+                                <td>{visit.visitId}</td>
+                                <td>{projectMap[visit.projectId]?.code}</td>
+                                <td>{visit.inspector}</td>
+                                <td>{visit.visitDate}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
+                </section>
+              </div>
+            )}
+
+            {invoiceView === "registered" && (
+              <div className="grid grid--two">
+                <section className="panel">
+                  <h2>Facturas registradas</h2>
+                  <div className="table-wrap">
+                    <table className="table">
+                      <thead><tr><th>Factura</th><th>DIAN</th><th>Mes</th><th>Empresa</th><th>Visitas</th><th></th></tr></thead>
+                      <tbody>
+                        {filteredInvoices.map((invoice) => (
+                          <tr key={invoice.id} className={activeInvoiceId === invoice.id ? "row--active" : ""}>
+                            <td>{invoice.invoiceNumber}</td>
+                            <td>{invoice.dianCode}</td>
+                            <td>{invoice.billingMonth}</td>
+                            <td>{companyMap[invoice.companyId]?.name}</td>
+                            <td>{invoice.visitIds.length}</td>
+                            <td><button className="btn btn--ghost" onClick={() => setActiveInvoiceId(invoice.id)}>Ver detalle</button></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                <section className="panel">
+                  <h2>Detalle de factura</h2>
+                  {!activeInvoice && <p>Selecciona una factura registrada para ver sus visitas vinculadas.</p>}
+                  {activeInvoice && (
+                    <>
+                      <div className="detail-list">
+                        <div><strong>Factura:</strong> {activeInvoice.invoiceNumber}</div>
+                        <div><strong>DIAN:</strong> {activeInvoice.dianCode}</div>
+                        <div><strong>Fecha:</strong> {activeInvoice.invoiceDate}</div>
+                        <div><strong>Empresa:</strong> {companyMap[activeInvoice.companyId]?.name}</div>
+                        <div><strong>Mes:</strong> {activeInvoice.billingMonth}</div>
+                      </div>
+                      <div className="table-wrap">
+                        <table className="table">
+                          <thead><tr><th>visit_id</th><th>Proyecto</th><th>Inspector</th><th>Estado</th></tr></thead>
+                          <tbody>
+                            {activeInvoice.visitIds.map((visitId) => data.visits.find((visit) => visit.id === visitId)).filter(Boolean).map((visit) => (
+                              <tr key={visit!.id}>
+                                <td>{visit!.visitId}</td>
+                                <td>{projectMap[visit!.projectId]?.code}</td>
+                                <td>{visit!.inspector}</td>
+                                <td>{statusLabels[visit!.status]}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
+                </section>
+              </div>
+            )}
           </>
         )}
       </main>
