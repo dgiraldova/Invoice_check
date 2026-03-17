@@ -1,49 +1,56 @@
-export type VisitEvent = {
+export type WorkflowStatus =
+  | "created"
+  | "report_in_progress"
+  | "report_done"
+  | "report_reviewed"
+  | "report_sent"
+  | "admin_notified"
+  | "pending_invoicing"
+  | "invoiced";
+
+export type Company = {
   id: string;
-  summary: string;
-  start: string;
-  end: string;
-  calendar?: string | null;
-  location?: string | null;
-  description?: string | null;
+  name: string;
+  nit: string;
 };
 
-export type BillingResult = {
-  type: "factura" | "prefactura" | null;
-  subject?: string;
-  receivedAt?: string;
+export type Project = {
+  id: string;
+  companyId: string;
+  code: string;
+  name: string;
 };
 
-export type ReportResult = {
-  found: boolean;
-  path?: string;
-  filename?: string;
+export type Visit = {
+  id: string;
+  visitId: string;
+  companyId: string;
+  projectId: string;
+  visitDate: string;
+  inspector: string;
+  status: WorkflowStatus;
+  reportDoneAt?: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  reportSentAt?: string;
+  adminNotifiedAt?: string;
+  invoiceRecordId?: string;
+  notes?: string;
 };
 
-export type VisitStatus =
-  | "Facturado"
-  | "Con prefactura"
-  | "Con informe pendiente de factura o prefactura"
-  | "Sin informe";
-
-export type ConfigSettings = {
-  gmail: {
-    keywords: string[];
-    dateWindowDays: number;
-  };
-  reports: {
-    extensions: string[];
-    recursive: boolean;
-  };
-  normalize: {
-    ignoreCaseAndAccents: boolean;
-  };
+export type InvoiceRecord = {
+  id: string;
+  invoiceNumber: string;
+  dianCode: string;
+  invoiceDate: string;
+  billingMonth: string;
+  companyId: string;
+  visitIds: string[];
 };
 
-export type VisitRow = {
-  event: VisitEvent;
-  billing: BillingResult;
-  report: ReportResult;
-  status: VisitStatus;
-  observation: string;
+export type AppData = {
+  companies: Company[];
+  projects: Project[];
+  visits: Visit[];
+  invoiceRecords: InvoiceRecord[];
 };
