@@ -222,6 +222,34 @@ body {
   background: #fff;
 }
 
+.field small {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.section-helper {
+  margin: 0 0 14px !important;
+  color: var(--muted);
+}
+
+.callout {
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  background: #f8fafc;
+}
+
+.callout strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.callout--info {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
 .field--inline {
   flex-direction: row;
   align-items: center;
@@ -322,7 +350,8 @@ body {
   flex-wrap: wrap;
 }
 
-.table-wrapper {
+.table-wrapper,
+.table-wrap {
   overflow: auto;
   border-radius: 12px;
   border: 1px solid var(--border);

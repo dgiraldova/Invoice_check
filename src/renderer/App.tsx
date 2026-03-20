@@ -21,7 +21,7 @@ const statusLabels: Record<WorkflowStatus, string> = {
   report_done: "Informe listo",
   report_reviewed: "Informe revisado",
   report_sent: "Informe enviado",
-  admin_notified: "Admin notificado",
+  admin_notified: "Administración notificada",
   pending_invoicing: "Pendiente de facturar",
   invoiced: "Facturado"
 };
@@ -128,25 +128,48 @@ type TransitionDraft = {
 
 const getTransitionRequirement = (visit: Visit, next: WorkflowStatus, draft: TransitionDraft) => {
   if (next === "report_done") {
-    if (!draft.reportDoneAt) return "Para marcar informe listo, registra la fecha/hora del informe.";
+    if (!draft.reportDoneAt) return "Para marcar el informe como listo, registra la fecha y hora de cierre.";
   }
   if (next === "report_reviewed") {
-    if (!visit.reportDoneAt && !draft.reportDoneAt) return "No puedes revisar un informe que no está marcado como listo.";
-    if (!draft.reviewedBy.trim()) return "Para marcar informe revisado, indica quién revisó.";
-    if (!draft.reviewedAt) return "Para marcar informe revisado, registra la fecha/hora de revisión.";
+    if (!visit.reportDoneAt && !draft.reportDoneAt) return "No puedes revisar un informe que todavía no está marcado como listo.";
+    if (!draft.reviewedBy.trim()) return "Para marcar el informe como revisado, indica quién hizo la revisión.";
+    if (!draft.reviewedAt) return "Para marcar el informe como revisado, registra la fecha y hora de revisión.";
   }
   if (next === "report_sent") {
-    if (!visit.reviewedAt && !draft.reviewedAt) return "No puedes enviar un informe que no ha sido revisado.";
-    if (!draft.reportSentAt) return "Para marcar informe enviado, registra la fecha/hora de envío.";
+    if (!visit.reviewedAt && !draft.reviewedAt) return "No puedes enviar un informe que todavía no ha sido revisado.";
+    if (!draft.reportSentAt) return "Para marcar el informe como enviado, registra la fecha y hora de envío.";
   }
   if (next === "admin_notified") {
-    if (!visit.reportSentAt && !draft.reportSentAt) return "No puedes notificar admin antes de enviar el informe.";
-    if (!draft.adminNotifiedAt) return "Para notificar admin, registra la fecha/hora de notificación.";
+    if (!visit.reportSentAt && !draft.reportSentAt) return "No puedes notificar al área administrativa antes de enviar el informe.";
+    if (!draft.adminNotifiedAt) return "Para notificar al área administrativa, registra la fecha y hora de notificación.";
   }
   if (next === "pending_invoicing") {
-    if (!visit.adminNotifiedAt && !draft.adminNotifiedAt) return "No puedes pasar a pending_invoicing sin haber notificado a admin.";
+    if (!visit.adminNotifiedAt && !draft.adminNotifiedAt) return "No puedes pasar a Pendiente de facturar sin haber notificado al área administrativa.";
   }
   return null;
+};
+
+const getTransitionGuidance = (status: WorkflowStatus | null) => {
+  switch (status) {
+    case "created":
+      return "Siguiente paso: marcar el informe como listo. Antes de avanzar, registra la fecha y hora en que quedó cerrado.";
+    case "report_in_progress":
+      return "Siguiente paso: marcar el informe como listo. Este cambio deja visible cuándo terminó la elaboración del informe.";
+    case "report_done":
+      return "Siguiente paso: registrar la revisión. Debes indicar quién revisó y cuándo quedó revisado.";
+    case "report_reviewed":
+      return "Siguiente paso: registrar el envío del informe. Debes guardar la fecha y hora del envío.";
+    case "report_sent":
+      return "Siguiente paso: confirmar la notificación al área administrativa. Guarda la fecha y hora de esa notificación.";
+    case "admin_notified":
+      return "Siguiente paso: mover la visita a Pendiente de facturar. Ese estado indica que ya puede entrar al registro de factura externa.";
+    case "pending_invoicing":
+      return "La visita ya está lista para facturación. Continúa en la pestaña Facturas para vincularla a una factura externa.";
+    case "invoiced":
+      return "La visita ya quedó vinculada a una factura externa. Desde aquí solo puedes consultar el estado.";
+    default:
+      return "Selecciona una visita para ver el paso actual y lo que falta para avanzar.";
+  }
 };
 
 const defaultDraft = (): TransitionDraft => ({
@@ -249,6 +272,7 @@ const App: React.FC = () => {
   const projectMap = useMemo(() => Object.fromEntries(data.projects.map((p) => [p.id, p])), [data.projects]);
   const activeVisit = data.visits.find((visit) => visit.id === activeVisitId) ?? null;
   const activeInvoice = data.invoiceRecords.find((invoice) => invoice.id === activeInvoiceId) ?? null;
+  const nextVisitStatus = activeVisit ? nextStatus(activeVisit.status) : null;
 
   const filteredVisits = useMemo(() => {
     return data.visits.filter((visit) => {
@@ -290,7 +314,7 @@ const App: React.FC = () => {
 
   const createProject = async () => {
     if (!projectCompanyId || !projectName.trim() || !projectCode.trim()) return setMessage("Proyecto, código y empresa son obligatorios.");
-    if (data.projects.some((p) => p.code === projectCode.trim())) return setMessage("Ese project_code ya existe.");
+    if (data.projects.some((p) => p.code === projectCode.trim())) return setMessage("Ese código de proyecto ya existe.");
     const project: Project = { id: uid(), companyId: projectCompanyId, code: projectCode.trim(), name: projectName.trim() };
     await persist({ ...data, projects: [...data.projects, project] });
     setProjectName("");
@@ -301,7 +325,7 @@ const App: React.FC = () => {
 
   const createVisit = async () => {
     if (!visitId.trim() || !visitCompanyId || !visitProjectId || !visitDate || !inspector.trim()) return setMessage("Completa todos los campos de visita.");
-    if (data.visits.some((v) => v.visitId === visitId.trim())) return setMessage("Ese visit_id ya existe.");
+    if (data.visits.some((v) => v.visitId === visitId.trim())) return setMessage("Ese ID de visita ya existe.");
     const visit: Visit = {
       id: uid(),
       visitId: visitId.trim(),
@@ -388,7 +412,7 @@ const App: React.FC = () => {
     if (data.invoiceRecords.some((invoice) => invoice.invoiceNumber === invoiceNumber.trim())) return setMessage("Ese número de factura ya está registrado.");
     if (selectedVisitIds.length === 0) return setMessage("Selecciona al menos una visita pendiente.");
     const visits = data.visits.filter((v) => selectedVisitIds.includes(v.id));
-    if (visits.some((v) => v.status !== "pending_invoicing")) return setMessage("Solo puedes facturar visitas en pending_invoicing.");
+    if (visits.some((v) => v.status !== "pending_invoicing")) return setMessage("Solo puedes facturar visitas en estado Pendiente de facturar.");
     const companyId = visits[0]?.companyId;
     if (!companyId || visits.some((v) => v.companyId !== companyId)) return setMessage("Todas las visitas deben pertenecer a la misma empresa.");
     const invoice: InvoiceRecord = {
@@ -419,7 +443,7 @@ const App: React.FC = () => {
       <header className="app__header">
         <div>
           <h1>Seguimiento de visitas y facturación</h1>
-          <p>Vertical slice v1: workflow hasta pendiente de facturar + tracking de factura externa.</p>
+          <p>Beta V1: seguimiento del flujo operativo hasta pendiente de facturación y registro de factura externa.</p>
         </div>
         <div className="status-bar">
           <span className="status status--ok">Empresas: {data.companies.length}</span>
@@ -433,19 +457,19 @@ const App: React.FC = () => {
           <div className="panel__header">
             <div>
               <h2>Navegación</h2>
-              <p>Primero workflow de visitas, luego tracking de facturas.</p>
+              <p>Orden recomendado: empresas y proyectos, luego visitas, y al final facturas.</p>
             </div>
             <div className="status-bar">
-              <button className="btn btn--ghost" onClick={() => setTab("dashboard")}>Dashboard</button>
-              <button className="btn btn--ghost" onClick={() => setTab("master")}>Empresas/Proyectos</button>
+              <button className="btn btn--ghost" onClick={() => setTab("dashboard")}>Resumen</button>
+              <button className="btn btn--ghost" onClick={() => setTab("master")}>Empresas y proyectos</button>
               <button className="btn btn--ghost" onClick={() => setTab("visits")}>Visitas</button>
               <button className="btn btn--ghost" onClick={() => setTab("invoices")}>Facturas</button>
             </div>
           </div>
           <div className="status-bar">
-            <button className="btn btn--ghost" onClick={exportBackup}>Exportar backup</button>
-            <button className="btn btn--ghost" onClick={importBackup}>Importar backup</button>
-            <span className="status status--idle">{hydrated ? `Backup local: ${backupPath ?? "pendiente"}` : "Cargando backup local..."}</span>
+            <button className="btn btn--ghost" onClick={exportBackup}>Exportar respaldo</button>
+            <button className="btn btn--ghost" onClick={importBackup}>Importar respaldo</button>
+            <span className="status status--idle">{hydrated ? `Respaldo local: ${backupPath ?? "pendiente"}` : "Cargando respaldo local..."}</span>
           </div>
           {message && <p className="status-message">{message}</p>}
         </section>
@@ -455,7 +479,7 @@ const App: React.FC = () => {
             <div className="panel__header panel__header--stack">
               <div>
                 <h2>Resumen operativo</h2>
-                <p>Ahora el workflow exige metadatos reales y guarda respaldo local en disco.</p>
+                <p>Este resumen muestra qué falta por facturar y deja visible el avance del flujo operativo.</p>
               </div>
             </div>
             <div className="cards">
@@ -471,15 +495,15 @@ const App: React.FC = () => {
           <div className="grid">
             <section className="panel">
               <h2>Crear empresa</h2>
-              <div className="field"><label>Nombre</label><input value={companyName} onChange={(e) => setCompanyName(e.target.value)} /></div>
-              <div className="field"><label>NIT</label><input value={companyNit} onChange={(e) => setCompanyNit(e.target.value)} /></div>
+              <div className="field"><label>Nombre de la empresa</label><input value={companyName} onChange={(e) => setCompanyName(e.target.value)} /><small>Usa el nombre visible con el que el equipo identifica la empresa.</small></div>
+              <div className="field"><label>NIT</label><input value={companyNit} onChange={(e) => setCompanyNit(e.target.value)} /><small>Debe ser único. Este dato se usa para evitar duplicados.</small></div>
               <button className="btn btn--primary" onClick={createCompany}>Crear empresa</button>
             </section>
             <section className="panel">
               <h2>Crear proyecto</h2>
-              <div className="field"><label>Empresa</label><select value={projectCompanyId} onChange={(e) => setProjectCompanyId(e.target.value)}><option value="">Selecciona</option>{data.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-              <div className="field"><label>Nombre</label><input value={projectName} onChange={(e) => setProjectName(e.target.value)} /></div>
-              <div className="field"><label>project_code</label><input value={projectCode} onChange={(e) => setProjectCode(e.target.value)} /></div>
+              <div className="field"><label>Empresa</label><select value={projectCompanyId} onChange={(e) => setProjectCompanyId(e.target.value)}><option value="">Selecciona una empresa</option>{data.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select><small>El proyecto quedará disponible solo para esa empresa.</small></div>
+              <div className="field"><label>Nombre del proyecto</label><input value={projectName} onChange={(e) => setProjectName(e.target.value)} /><small>Usa el nombre operativo con el que el proyecto se reconoce internamente.</small></div>
+              <div className="field"><label>Código del proyecto</label><input value={projectCode} onChange={(e) => setProjectCode(e.target.value)} /><small>Debe ser único. Este código identifica el proyecto en visitas y facturación.</small></div>
               <button className="btn btn--primary" onClick={createProject}>Crear proyecto</button>
             </section>
           </div>
@@ -489,12 +513,13 @@ const App: React.FC = () => {
           <>
             <section className="panel">
               <h2>Crear visita</h2>
+              <p className="section-helper">Completa primero la identificación operativa de la visita. El flujo arranca en Creada.</p>
               <div className="grid">
-                <div className="field"><label>visit_id</label><input value={visitId} onChange={(e) => setVisitId(e.target.value)} /></div>
-                <div className="field"><label>Empresa</label><select value={visitCompanyId} onChange={(e) => setVisitCompanyId(e.target.value)}><option value="">Selecciona</option>{data.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-                <div className="field"><label>Proyecto</label><select value={visitProjectId} onChange={(e) => setVisitProjectId(e.target.value)}><option value="">Selecciona</option>{data.projects.filter((p) => !visitCompanyId || p.companyId === visitCompanyId).map((p) => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}</select></div>
-                <div className="field"><label>Fecha</label><input type="date" value={visitDate} onChange={(e) => setVisitDate(e.target.value)} /></div>
-                <div className="field"><label>Inspector</label><input value={inspector} onChange={(e) => setInspector(e.target.value)} /></div>
+                <div className="field"><label>ID de visita</label><input value={visitId} onChange={(e) => setVisitId(e.target.value)} /><small>Debe ser único. Este identificador se usa para rastrear la visita en todo el flujo.</small></div>
+                <div className="field"><label>Empresa</label><select value={visitCompanyId} onChange={(e) => setVisitCompanyId(e.target.value)}><option value="">Selecciona una empresa</option>{data.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select><small>Primero elige la empresa para mostrar solo sus proyectos.</small></div>
+                <div className="field"><label>Proyecto</label><select value={visitProjectId} onChange={(e) => setVisitProjectId(e.target.value)}><option value="">Selecciona un proyecto</option>{data.projects.filter((p) => !visitCompanyId || p.companyId === visitCompanyId).map((p) => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}</select><small>Solo puedes asociar proyectos de la empresa seleccionada.</small></div>
+                <div className="field"><label>Fecha de la visita</label><input type="date" value={visitDate} onChange={(e) => setVisitDate(e.target.value)} /><small>Usa la fecha operativa de ejecución de la visita.</small></div>
+                <div className="field"><label>Inspector responsable</label><input value={inspector} onChange={(e) => setInspector(e.target.value)} /><small>Registra quién ejecutó o lideró la visita.</small></div>
               </div>
               <button className="btn btn--primary" onClick={createVisit}>Crear visita</button>
             </section>
@@ -504,7 +529,7 @@ const App: React.FC = () => {
                 <div className="panel__header">
                   <div>
                     <h2>Cola de visitas</h2>
-                    <p>Selecciona una visita para avanzar con validaciones reales.</p>
+                    <p>Selecciona una visita para revisar el estado actual, lo que falta y el siguiente paso permitido.</p>
                   </div>
                   <div className="status-bar">
                     <select value={filter} onChange={(e) => setFilter(e.target.value as any)}><option value="all">Todas</option><option value="pending">Pendientes de facturar</option><option value="invoiced">Facturadas</option></select>
@@ -513,7 +538,7 @@ const App: React.FC = () => {
                 </div>
                 <div className="table-wrap">
                   <table className="table">
-                    <thead><tr><th>visit_id</th><th>Empresa</th><th>Proyecto</th><th>Fecha</th><th>Inspector</th><th>Estado</th><th></th></tr></thead>
+                    <thead><tr><th>Id. visita</th><th>Empresa</th><th>Proyecto</th><th>Fecha</th><th>Inspector</th><th>Estado</th><th></th></tr></thead>
                     <tbody>
                       {filteredVisits.map((visit) => (
                         <tr key={visit.id} className={activeVisitId === visit.id ? "row--active" : ""}>
@@ -537,22 +562,27 @@ const App: React.FC = () => {
                 {activeVisit && (
                   <>
                     <div className="detail-list">
-                      <div><strong>visit_id:</strong> {activeVisit.visitId}</div>
+                      <div><strong>ID de visita:</strong> {activeVisit.visitId}</div>
                       <div><strong>Empresa:</strong> {companyMap[activeVisit.companyId]?.name}</div>
                       <div><strong>Proyecto:</strong> {projectMap[activeVisit.projectId]?.code}</div>
                       <div><strong>Estado actual:</strong> {statusLabels[activeVisit.status]}</div>
-                      <div><strong>Siguiente estado:</strong> {nextStatus(activeVisit.status) ? statusLabels[nextStatus(activeVisit.status)!] : "Final"}</div>
+                      <div><strong>Siguiente estado:</strong> {nextVisitStatus ? statusLabels[nextVisitStatus] : "Final"}</div>
+                    </div>
+
+                    <div className="callout callout--info">
+                      <strong>Guía del paso actual</strong>
+                      <p>{getTransitionGuidance(activeVisit.status)}</p>
                     </div>
 
                     <div className="grid">
-                      <div className="field"><label>Fecha/hora informe listo</label><input type="datetime-local" value={transitionDraft.reportDoneAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reportDoneAt: e.target.value }))} /></div>
-                      <div className="field"><label>Revisado por</label><input value={transitionDraft.reviewedBy} onChange={(e) => setTransitionDraft((d) => ({ ...d, reviewedBy: e.target.value }))} /></div>
-                      <div className="field"><label>Fecha/hora revisión</label><input type="datetime-local" value={transitionDraft.reviewedAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reviewedAt: e.target.value }))} /></div>
-                      <div className="field"><label>Fecha/hora envío</label><input type="datetime-local" value={transitionDraft.reportSentAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reportSentAt: e.target.value }))} /></div>
-                      <div className="field"><label>Fecha/hora notificación admin</label><input type="datetime-local" value={transitionDraft.adminNotifiedAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, adminNotifiedAt: e.target.value }))} /></div>
+                      <div className="field"><label>Fecha y hora de informe listo</label><input type="datetime-local" value={transitionDraft.reportDoneAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reportDoneAt: e.target.value }))} /><small>Completa este campo antes de mover la visita a Informe listo.</small></div>
+                      <div className="field"><label>Revisado por</label><input value={transitionDraft.reviewedBy} onChange={(e) => setTransitionDraft((d) => ({ ...d, reviewedBy: e.target.value }))} /><small>Este campo es obligatorio cuando el siguiente paso es Informe revisado.</small></div>
+                      <div className="field"><label>Fecha y hora de revisión</label><input type="datetime-local" value={transitionDraft.reviewedAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reviewedAt: e.target.value }))} /><small>Se usa al pasar la visita a Informe revisado.</small></div>
+                      <div className="field"><label>Fecha y hora de envío</label><input type="datetime-local" value={transitionDraft.reportSentAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reportSentAt: e.target.value }))} /><small>Se usa al pasar la visita a Informe enviado.</small></div>
+                      <div className="field"><label>Fecha y hora de notificación administrativa</label><input type="datetime-local" value={transitionDraft.adminNotifiedAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, adminNotifiedAt: e.target.value }))} /><small>Se usa antes de marcar la visita como Pendiente de facturar.</small></div>
                     </div>
 
-                    <button className="btn btn--primary" onClick={advanceVisit} disabled={activeVisit.status === "invoiced"}>Avanzar estado</button>
+                    <button className="btn btn--primary" onClick={advanceVisit} disabled={activeVisit.status === "invoiced"}>Avanzar al siguiente estado</button>
                   </>
                 )}
               </section>
@@ -566,7 +596,7 @@ const App: React.FC = () => {
               <div className="panel__header">
                 <div>
                   <h2>Facturación</h2>
-                  <p>Separa claramente pendientes por facturar vs facturas ya registradas.</p>
+                  <p>Primero selecciona visitas en Pendientes y después registra la factura externa para moverlas a Registradas.</p>
                 </div>
                 <div className="status-bar">
                   <button className="btn btn--ghost" onClick={() => setInvoiceView("pending")}>Pendientes</button>
@@ -586,18 +616,18 @@ const App: React.FC = () => {
                   <div className="panel__header">
                     <div>
                       <h2>Registrar factura externa</h2>
-                      <p>Si eliges una visita, la selección queda bloqueada a esa empresa.</p>
+                      <p>La selección queda limitada a una sola empresa para evitar mezclas inválidas.</p>
                     </div>
                     <button className="btn btn--ghost" onClick={clearInvoiceSelection}>Limpiar selección</button>
                   </div>
                   <div className="grid">
-                    <div className="field"><label>Número de factura</label><input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} /></div>
-                    <div className="field"><label>Código DIAN</label><input value={dianCode} onChange={(e) => setDianCode(e.target.value)} /></div>
-                    <div className="field"><label>Fecha factura</label><input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} /></div>
+                    <div className="field"><label>Número de factura</label><input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} /><small>Debe ser único dentro del registro local.</small></div>
+                    <div className="field"><label>Código DIAN</label><input value={dianCode} onChange={(e) => setDianCode(e.target.value)} /><small>Este campo es obligatorio para registrar la factura externa.</small></div>
+                    <div className="field"><label>Fecha de la factura</label><input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} /><small>El mes de facturación se toma automáticamente desde esta fecha.</small></div>
                   </div>
                   <div className="table-wrap">
                     <table className="table">
-                      <thead><tr><th></th><th>visit_id</th><th>Empresa</th><th>Proyecto</th><th>Fecha</th><th>Estado</th></tr></thead>
+                      <thead><tr><th></th><th>Id. visita</th><th>Empresa</th><th>Proyecto</th><th>Fecha</th><th>Estado</th></tr></thead>
                       <tbody>
                         {selectablePendingVisits.map((visit) => (
                           <tr key={visit.id} className={selectedVisitIds.includes(visit.id) ? "row--active" : ""}>
@@ -617,7 +647,7 @@ const App: React.FC = () => {
 
                 <section className="panel">
                   <h2>Resumen de selección</h2>
-                  {selectedVisitIds.length === 0 && <p>No hay visitas seleccionadas todavía.</p>}
+                  {selectedVisitIds.length === 0 && <p>Selecciona una o más visitas pendientes para habilitar el registro de factura.</p>}
                   {selectedVisitIds.length > 0 && (
                     <>
                       <div className="detail-list">
@@ -627,7 +657,7 @@ const App: React.FC = () => {
                       </div>
                       <div className="table-wrap">
                         <table className="table">
-                          <thead><tr><th>visit_id</th><th>Proyecto</th><th>Inspector</th><th>Fecha</th></tr></thead>
+                          <thead><tr><th>Id. visita</th><th>Proyecto</th><th>Inspector</th><th>Fecha</th></tr></thead>
                           <tbody>
                             {selectedVisits.map((visit) => (
                               <tr key={visit.id}><td>{visit.visitId}</td><td>{projectMap[visit.projectId]?.code}</td><td>{visit.inspector}</td><td>{visit.visitDate}</td></tr>
@@ -661,7 +691,7 @@ const App: React.FC = () => {
 
                 <section className="panel">
                   <h2>Detalle de factura</h2>
-                  {!activeInvoice && <p>Selecciona una factura registrada para ver sus visitas vinculadas.</p>}
+                  {!activeInvoice && <p>Selecciona una factura registrada para revisar las visitas que quedaron vinculadas.</p>}
                   {activeInvoice && (
                     <>
                       <div className="detail-list">
@@ -673,7 +703,7 @@ const App: React.FC = () => {
                       </div>
                       <div className="table-wrap">
                         <table className="table">
-                          <thead><tr><th>visit_id</th><th>Proyecto</th><th>Inspector</th><th>Estado</th></tr></thead>
+                          <thead><tr><th>Id. visita</th><th>Proyecto</th><th>Inspector</th><th>Estado</th></tr></thead>
                           <tbody>
                             {activeInvoice.visitIds.map((visitId) => data.visits.find((visit) => visit.id === visitId)).filter(Boolean).map((visit) => (
                               <tr key={visit!.id}><td>{visit!.visitId}</td><td>{projectMap[visit!.projectId]?.code}</td><td>{visit!.inspector}</td><td>{statusLabels[visit!.status]}</td></tr>
