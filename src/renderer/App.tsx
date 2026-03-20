@@ -22,7 +22,7 @@ const statusLabels: Record<WorkflowStatus, string> = {
   report_reviewed: "Informe revisado",
   report_sent: "Informe enviado",
   admin_notified: "Administración notificada",
-  pending_invoicing: "Pendiente de facturar",
+  pending_invoicing: "Pendiente de facturación",
   invoiced: "Facturado"
 };
 
@@ -144,7 +144,7 @@ const getTransitionRequirement = (visit: Visit, next: WorkflowStatus, draft: Tra
     if (!draft.adminNotifiedAt) return "Para notificar al área administrativa, registra la fecha y hora de notificación.";
   }
   if (next === "pending_invoicing") {
-    if (!visit.adminNotifiedAt && !draft.adminNotifiedAt) return "No puedes pasar a Pendiente de facturar sin haber notificado al área administrativa.";
+    if (!visit.adminNotifiedAt && !draft.adminNotifiedAt) return "No puedes pasar a Pendiente de facturación sin haber notificado al área administrativa.";
   }
   return null;
 };
@@ -162,7 +162,7 @@ const getTransitionGuidance = (status: WorkflowStatus | null) => {
     case "report_sent":
       return "Siguiente paso: confirmar la notificación al área administrativa. Guarda la fecha y hora de esa notificación.";
     case "admin_notified":
-      return "Siguiente paso: mover la visita a Pendiente de facturar. Ese estado indica que ya puede entrar al registro de factura externa.";
+      return "Siguiente paso: mover la visita a Pendiente de facturación. Ese estado indica que ya puede entrar al registro de factura externa.";
     case "pending_invoicing":
       return "La visita ya está lista para facturación. Continúa en la pestaña Facturas para vincularla a una factura externa.";
     case "invoiced":
@@ -513,7 +513,7 @@ const App: React.FC = () => {
           <>
             <section className="panel">
               <h2>Crear visita</h2>
-              <p className="section-helper">Completa primero la identificación operativa de la visita. El flujo arranca en Creada.</p>
+              <p className="section-helper">Completa primero la identificación operativa de la visita. El flujo arranca en estado Creada.</p>
               <div className="grid">
                 <div className="field"><label>ID de visita</label><input value={visitId} onChange={(e) => setVisitId(e.target.value)} /><small>Debe ser único. Este identificador se usa para rastrear la visita en todo el flujo.</small></div>
                 <div className="field"><label>Empresa</label><select value={visitCompanyId} onChange={(e) => setVisitCompanyId(e.target.value)}><option value="">Selecciona una empresa</option>{data.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select><small>Primero elige la empresa para mostrar solo sus proyectos.</small></div>
@@ -557,8 +557,8 @@ const App: React.FC = () => {
               </section>
 
               <section className="panel">
-                <h2>Detalle y transición</h2>
-                {!activeVisit && <p>Selecciona una visita para gestionar sus transiciones.</p>}
+                <h2>Detalle y avance de estado</h2>
+                {!activeVisit && <p>Selecciona una visita para revisar requisitos y registrar el siguiente estado.</p>}
                 {activeVisit && (
                   <>
                     <div className="detail-list">
@@ -567,6 +567,7 @@ const App: React.FC = () => {
                       <div><strong>Proyecto:</strong> {projectMap[activeVisit.projectId]?.code}</div>
                       <div><strong>Estado actual:</strong> {statusLabels[activeVisit.status]}</div>
                       <div><strong>Siguiente estado:</strong> {nextVisitStatus ? statusLabels[nextVisitStatus] : "Final"}</div>
+                      <div><strong>Qué debes registrar ahora:</strong> {nextVisitStatus ? `Los datos necesarios para dejar la visita en ${statusLabels[nextVisitStatus].toLowerCase()}.` : "La visita ya terminó el flujo operativo."}</div>
                     </div>
 
                     <div className="callout callout--info">
@@ -574,15 +575,17 @@ const App: React.FC = () => {
                       <p>{getTransitionGuidance(activeVisit.status)}</p>
                     </div>
 
+                    <p className="section-helper">Completa solo el dato del siguiente paso. Si un campo ya tiene valor, puedes confirmarlo o ajustarlo antes de avanzar.</p>
+
                     <div className="grid">
-                      <div className="field"><label>Fecha y hora de informe listo</label><input type="datetime-local" value={transitionDraft.reportDoneAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reportDoneAt: e.target.value }))} /><small>Completa este campo antes de mover la visita a Informe listo.</small></div>
-                      <div className="field"><label>Revisado por</label><input value={transitionDraft.reviewedBy} onChange={(e) => setTransitionDraft((d) => ({ ...d, reviewedBy: e.target.value }))} /><small>Este campo es obligatorio cuando el siguiente paso es Informe revisado.</small></div>
-                      <div className="field"><label>Fecha y hora de revisión</label><input type="datetime-local" value={transitionDraft.reviewedAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reviewedAt: e.target.value }))} /><small>Se usa al pasar la visita a Informe revisado.</small></div>
-                      <div className="field"><label>Fecha y hora de envío</label><input type="datetime-local" value={transitionDraft.reportSentAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reportSentAt: e.target.value }))} /><small>Se usa al pasar la visita a Informe enviado.</small></div>
-                      <div className="field"><label>Fecha y hora de notificación administrativa</label><input type="datetime-local" value={transitionDraft.adminNotifiedAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, adminNotifiedAt: e.target.value }))} /><small>Se usa antes de marcar la visita como Pendiente de facturar.</small></div>
+                      <div className="field"><label>Fecha y hora de informe listo</label><input type="datetime-local" value={transitionDraft.reportDoneAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reportDoneAt: e.target.value }))} /><small>Registra cuándo el informe quedó terminado y listo para revisión.</small></div>
+                      <div className="field"><label>Revisado por</label><input value={transitionDraft.reviewedBy} onChange={(e) => setTransitionDraft((d) => ({ ...d, reviewedBy: e.target.value }))} /><small>Nombre de la persona que validó el informe antes del envío.</small></div>
+                      <div className="field"><label>Fecha y hora de revisión</label><input type="datetime-local" value={transitionDraft.reviewedAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reviewedAt: e.target.value }))} /><small>Momento en que quedó aprobada la revisión del informe.</small></div>
+                      <div className="field"><label>Fecha y hora de envío</label><input type="datetime-local" value={transitionDraft.reportSentAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, reportSentAt: e.target.value }))} /><small>Registra cuándo el informe fue enviado al destinatario correspondiente.</small></div>
+                      <div className="field"><label>Fecha y hora de notificación a administración</label><input type="datetime-local" value={transitionDraft.adminNotifiedAt} onChange={(e) => setTransitionDraft((d) => ({ ...d, adminNotifiedAt: e.target.value }))} /><small>Momento en que se avisó al área administrativa que la visita quedó lista para pasar a facturación.</small></div>
                     </div>
 
-                    <button className="btn btn--primary" onClick={advanceVisit} disabled={activeVisit.status === "invoiced"}>Avanzar al siguiente estado</button>
+                    <button className="btn btn--primary" onClick={advanceVisit} disabled={activeVisit.status === "invoiced"}>Guardar y avanzar al siguiente estado</button>
                   </>
                 )}
               </section>
@@ -606,7 +609,7 @@ const App: React.FC = () => {
 
               <div className="filters filters--tight">
                 <label className="field"><span>Empresa</span><select value={invoiceCompanyFilter} onChange={(e) => setInvoiceCompanyFilter(e.target.value)}><option value="">Todas las empresas</option>{data.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-                <label className="field"><span>Mes facturación</span><select value={billingMonthFilter} onChange={(e) => setBillingMonthFilter(e.target.value)}><option value="all">Todos</option>{monthOptions.map((month) => <option key={month} value={month}>{month}</option>)}</select></label>
+                <label className="field"><span>Mes de facturación</span><select value={billingMonthFilter} onChange={(e) => setBillingMonthFilter(e.target.value)}><option value="all">Todos</option>{monthOptions.map((month) => <option key={month} value={month}>{month}</option>)}</select></label>
               </div>
             </section>
 
@@ -616,7 +619,7 @@ const App: React.FC = () => {
                   <div className="panel__header">
                     <div>
                       <h2>Registrar factura externa</h2>
-                      <p>La selección queda limitada a una sola empresa para evitar mezclas inválidas.</p>
+                      <p>Primero selecciona las visitas pendientes y luego registra la factura. La selección queda limitada a una sola empresa para evitar mezclas inválidas.</p>
                     </div>
                     <button className="btn btn--ghost" onClick={clearInvoiceSelection}>Limpiar selección</button>
                   </div>
